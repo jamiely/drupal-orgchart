@@ -1,0 +1,321 @@
+<?php
+// $Id$
+
+/**
+* Display help and module information
+* @param path which path of the site we're displaying help
+* @param arg array that holds the current path as would be returned from arg() function
+* @return help text for the path
+*/
+function orgchart_help ($path, $arg) {
+  $output = '';  //declare your output variable
+  switch ($path) {
+    case "admin/help#orgchart":
+      $output = '<p>'.  t("Displays links to nodes created on this date") .'</p>';
+      break;
+  }
+  return $output;
+}  // function orgchart_help
+
+/**
+* Valid permissions for this module
+* @return array An array of valid permissions for the orgchart module
+*/
+function orgchart_perm() {
+  return array('access orgchart content');
+} // function orgchart_perm()
+
+/**
+* Implementation of hook_block
+* @param string $op one of "list", "view", "save" and "configure"
+* @param integer $delta code to identify the block
+* @param array $edit only for "save" operation
+**/
+function orgchart_block($op = 'list', $delta = 0, $edit = array()) { 
+  if ($op == "list") {
+    // Generate listing of blocks from this module, for the admin/block page
+    $block = array();
+    $block[0]["info"] = t('Organizational Chart');
+    return $block;
+  }
+  else if ($op == 'view') {
+    // dpm('orgchart_block: view');
+    
+    $eId = orgchart_get_employee_id($GLOBALS['user']->uid);
+    // dpm('eid:'.$eId);
+    
+    $block['subject'] = 'Org Chart';
+    $hier = orgchart_get_hierarchy($eId);
+    $block['content'] = $eId ? 
+      orgchart_display_html($hier) ://'<pre>' . print_r($hier, true) . '</pre>':
+      'No employee id specified.';
+    
+    
+    
+    return $block;
+  }
+} // function orgchart_block
+
+function orgchart_user_link ($uid, $linkText = '') {
+  $u = $uid;
+  if (is_object($uid)) {
+    $u = $uid->uid;
+    if ( $linkText == '' ) $linkText = $uid->name;
+  }
+  else if (is_array($uid)) {
+    $u = $uid['uid'];
+    if ( $linkText == '' ) $linkText = $uid['name'];
+  }
+  
+  return l($linkText, '/user/'.$u);
+}
+
+function orgchart_display_html($hier, $showBoss=true, $root=true) {
+  dpm('orgchart_display_html');
+  dpm($hier);
+  
+  $classDirectSupervisor = 'orgchart_supervisor';
+  $classSubordinate = 'orgchart_subordinate';
+  $classEmployee = 'orgchart_person';
+  $classMe = 'orgchart_me';
+  
+  $html = array();
+  if ($root) $html[] = '<div class="orgchart"';
+  if ($showBoss) $html[] = '<ul><span class="orgchart_person '.$orgchart_supervisor.'">' . orgchart_user_link($hier['supervisor']) . '</span><li>';
+  $html[] = '<ul><span class="orgchart_person '.(
+    $GLOBALS['user']->uid == $hier['uid'] ? $classMe : $classSubordinate
+    ).'">' . orgchart_user_link($hier) . '</span>';
+  foreach ( $hier['subordinates'] as $sub ) {
+    $html[] = '<li>';
+    $html[] = orgchart_display_html($sub,false,false);
+    $html[] = '</li>';
+    
+  }
+  $html[] = '</ul>';
+  if ($showBoss) $html[] = '</li></ul>';
+  if ($root) $html[] = '</div>';
+  return implode('',$html);
+  
+}
+
+
+function orgchart_get_key_fields() {
+  static $fields;
+  if (!isset($fields)) {
+    if ($cache = cache_get('orgchart_fields') && !empty($cache->data)) {
+      $fields = unserialize($cache->data);
+    }
+    else {
+      $fields = array();
+      $query = "SELECT fid, name FROM {profile_fields} WHERE name in ('profile_employee_id', 'profile_supervisor_id', 'profile_subordinate_id')";
+      $query_result = db_query($query);
+      // retrieve fields. this should probably be cached.
+      while ($fields_info = db_fetch_object($query_result)) {
+        $fields[$fields_info->name] = $fields_info->fid;
+      }      
+      cache_set('orgchart_fields', serialize($fields), 'cache');
+    }
+  }
+  return $fields;
+}
+
+function orgchart_get_user_id ($employee_id) {
+  static $fields;
+  static $userids;
+  
+  if (empty($userids)) {
+    if ($cache = cache_get('orgchart_userids') && !empty($cache->data)) {
+      $userids = $cache->data;
+    }
+    else {
+      $userids = array();
+    }
+  }
+
+  // we have the employee ids, now check to see if employee_id is in there
+  if (isset($userids[$employee_id])) {
+    return $userids[$employee_id];
+  }
+  else { 
+    // don't load fields until we need to
+    if (!isset($fields)) {
+      $fields = orgchart_get_key_fields ();
+    }
+    // proceed with lookup
+    $query = "SELECT uid FROM {profile_values} WHERE value = %d AND fid = %d";
+    $result = db_query($query, $employee_id, $fields['profile_employee_id']); // retrieve employee id given a user id
+    $info = db_fetch_object($result);
+
+    if ($info) {
+      $id = $info->uid;
+      $userids[$employee_id] = $id;
+      // update the cache
+      cache_set('orgchart_userids', serialize($userids), 'cache');
+      
+      return $id;
+    }
+  }
+  
+  return null;
+}
+
+function orgchart_get_employee_id ($uid) {
+  static $fields;
+  static $employeeIds;
+  
+  if (empty($employeeIds)) {
+    if ($cache = cache_get('orgchart_employeeids') && !empty($cache->data)) {
+      $employeeIds = $cache->data;
+    }
+    else {
+      $employeeIds = array();
+    }
+  }
+
+  // we have the employee ids, now check to see if uid is in there
+  if (isset($employeeIds[$uid])) {
+    return $employeeIds[$uid];
+  }
+  else { 
+    // don't load fields until we need to
+    if (!isset($fields)) {
+      $fields = orgchart_get_key_fields ();
+    }
+    // proceed with lookup
+    $query = "SELECT value FROM {profile_values} WHERE uid = %d AND fid = %d";
+    $result = db_query($query, $uid, $fields['profile_employee_id']); // retrieve employee id given a user id
+    
+    $info = db_fetch_object($result);
+    // dvm($info);
+    if ($info) {
+      $id = $info->value;
+      $employeeIds[$uid] = $id;
+      // update the cache
+      cache_set('orgchart_employeeids', serialize($employeeIds), 'cache');
+      
+      return $id;
+    }
+  }
+  
+  return null;
+}
+
+/**
+* Will not get siblings--people in the same level as you.
+**/
+function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $get_coworkers = false) {
+  static $hierTree;
+  
+  // dpm('orgchart_get_hierarchy: '.$root_employee_id);
+  
+  if (!isset($hierTree)) {
+    if (($cache = cache_get('orgchart_hiertree', 'cache')) && !isset($cache->data)) {
+      $hierTee = $cache->data;
+    }
+    else {
+      $hierTree = array();
+    }
+  }
+  
+  $key = implode('-', func_get_args());
+  if (!isset($hierTree[$key])) {
+    $hier = orgchart_get_hierarchy_base($root_employee_id);
+    
+    dvm($hier);
+    if ($depth > 0) {
+      if ($direction<=0) {
+        // go down in the hierarchy
+        $hier['subordinates'] = array();
+        if (!empty($hier['profile_subordinate_id'])) {
+          foreach($hier['profile_subordinate_id'] as $sub) {
+            $hier['subordinates'][] = orgchart_get_hierarchy($sub, -1, $depth-1);
+          }
+        }
+      }
+      if ($direction>=0 && !empty($hier['profile_supervisor_id'])) {
+        // go up in the hierarchy
+        dpm('get supervisor: id='.$hier['profile_supervisor_id']);
+        $hier['supervisor'] = orgchart_get_hierarchy($hier['profile_supervisor_id'], 1, $depth-1);
+        dpm('supervisor:');
+        dvm($hier['supervisor']);
+      }
+    }
+    if ($get_coworkers && isset($hier['supervisor'])) {
+      // same supervisor's subordinates are your coworkers
+      $supervisorHierarchy = orgchart_get_hierarchy($hier['supervisor']['profile_employee_id'], -1, 1, true);
+      $hier['coworkers'] = $supervisorHierarchy['subordinates'];
+    }
+    $hierTree[$key] = &$hier;
+    cache_set('orgchart_hiertree', serialize($hierTree), 'cache');
+  }
+  else {
+    $hier = $hierTree[$key];
+  }
+  
+  return $hier;
+}
+
+function orgchart_get_hierarchy_base($root_employee_id) {
+  static $fields;
+  static $hierarchy;
+  // dpm('orgchart_get_hierarchy_base: root_employee_id='.$root_employee_id);
+      
+  if (!isset($hierarchy)) {
+    $cache = cache_get('orgchart_hierarchy', 'cache');
+    $hierarchy = !isset($cache->data) ? array() : $cache->data;
+    dpm('hierarchy cache');
+    dvm($hierarchy);
+  }
+  
+  
+  
+  if (isset($hierarchy[$root_employee_id])) {
+    return $hierarchy[$root_employee_id];
+  }
+  else { 
+    // hierarchy was not found in cache. look it up
+    $uid = orgchart_get_user_id ($root_employee_id);
+    // dpm('orgchart_get_hierarchy_base: uid='.$uid);
+    
+    if ($uid){
+      if (!isset($fields)) {
+        $fields = orgchart_get_key_fields ();
+      }
+      $query_info = "SELECT fid, value FROM {profile_values} WHERE uid = %d AND fid IN (%d, %d, %d) ";
+      $query_info_result = db_query(
+        $query_info, 
+        $uid, 
+        $fields['profile_employee_id'], 
+        $fields['profile_supervisor_id'], 
+        $fields['profile_subordinate_id']
+        );
+      // init hierarchy
+      $user = &user_load($uid);
+      $hierarchy[$root_employee_id] = array (
+        'profile_employee_id' => $root_employee_id,
+        'uid' => $uid,
+        'name' => $user->name,
+        'profile_supervisor_id' => null, // init to empty, will be set by array
+        'profile_subordinate_id' => null
+        );
+      while ($result = db_fetch_object($query_info_result)) {
+        if ($result->fid == $fields['profile_subordinate_id']) {
+          // the subordinates are stored as a text list separated by either comma's or newlines
+          
+          $hierarchy[$root_employee_id]['profile_subordinate_id'] = 
+            trim($result->value) == '' ? array() : preg_split('/(\\r?\\n|,)/', $result->value);
+          
+        }
+        else if ($result->fid == $fields['profile_supervisor_id']) {
+          $hierarchy[$root_employee_id]['profile_supervisor_id'] = $result->value;
+        }
+      }
+      dpm('orgchart_get_hierarchy_base: hierarchy=');
+      dvm($hierarchy[$root_employee_id]);
+      // save to cache
+      cache_set('orgchart_hierarchy', serialize($hierarchy), 'cache');
+      return $hierarchy[$root_employee_id];
+    }
+  }
+  return null;
+}

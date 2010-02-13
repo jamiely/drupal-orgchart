@@ -1,0 +1,8 @@
+; $Id$
+name = OrgChart
+description = Creates an org chart
+package = Core - optional
+version = VERSION
+core = 6.x
+dependencies[] = profile
+dependencies[] = devel
