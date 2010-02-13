@@ -39,11 +39,8 @@ function orgchart_block($op = 'list', $delta = 0, $edit = array()) {
     return $block;
   }
   else if ($op == 'view') {
-    // dpm('orgchart_block: view');
     
     $eId = orgchart_get_employee_id($GLOBALS['user']->uid);
-    // dpm('eid:'.$eId);
-    
     $block['subject'] = 'Org Chart';
     $hier = orgchart_get_hierarchy($eId);
     $block['content'] = $eId ? 
@@ -71,9 +68,6 @@ function orgchart_user_link ($uid, $linkText = '') {
 }
 
 function orgchart_display_html($hier, $showBoss=true, $root=true) {
-  dpm('orgchart_display_html');
-  dpm($hier);
-  
   $classDirectSupervisor = 'orgchart_supervisor';
   $classSubordinate = 'orgchart_subordinate';
   $classEmployee = 'orgchart_person';
@@ -113,7 +107,7 @@ function orgchart_get_key_fields() {
       while ($fields_info = db_fetch_object($query_result)) {
         $fields[$fields_info->name] = $fields_info->fid;
       }      
-      cache_set('orgchart_fields', serialize($fields), 'cache');
+      cache_set('orgchart_fields', serialize($fields));
     }
   }
   return $fields;
@@ -150,7 +144,7 @@ function orgchart_get_user_id ($employee_id) {
       $id = $info->uid;
       $userids[$employee_id] = $id;
       // update the cache
-      cache_set('orgchart_userids', serialize($userids), 'cache');
+      cache_set('orgchart_userids', serialize($userids));
       
       return $id;
     }
@@ -186,12 +180,11 @@ function orgchart_get_employee_id ($uid) {
     $result = db_query($query, $uid, $fields['profile_employee_id']); // retrieve employee id given a user id
     
     $info = db_fetch_object($result);
-    // dvm($info);
     if ($info) {
       $id = $info->value;
       $employeeIds[$uid] = $id;
       // update the cache
-      cache_set('orgchart_employeeids', serialize($employeeIds), 'cache');
+      cache_set('orgchart_employeeids', serialize($employeeIds));
       
       return $id;
     }
@@ -206,8 +199,6 @@ function orgchart_get_employee_id ($uid) {
 function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $get_coworkers = false) {
   static $hierTree;
   
-  // dpm('orgchart_get_hierarchy: '.$root_employee_id);
-  
   if (!isset($hierTree)) {
     if (($cache = cache_get('orgchart_hiertree', 'cache')) && !isset($cache->data)) {
       $hierTee = $cache->data;
@@ -221,7 +212,6 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
   if (!isset($hierTree[$key])) {
     $hier = orgchart_get_hierarchy_base($root_employee_id);
     
-    dvm($hier);
     if ($depth > 0) {
       if ($direction<=0) {
         // go down in the hierarchy
@@ -234,10 +224,7 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
       }
       if ($direction>=0 && !empty($hier['profile_supervisor_id'])) {
         // go up in the hierarchy
-        dpm('get supervisor: id='.$hier['profile_supervisor_id']);
         $hier['supervisor'] = orgchart_get_hierarchy($hier['profile_supervisor_id'], 1, $depth-1);
-        dpm('supervisor:');
-        dvm($hier['supervisor']);
       }
     }
     if ($get_coworkers && isset($hier['supervisor'])) {
@@ -246,7 +233,7 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
       $hier['coworkers'] = $supervisorHierarchy['subordinates'];
     }
     $hierTree[$key] = &$hier;
-    cache_set('orgchart_hiertree', serialize($hierTree), 'cache');
+    cache_set('orgchart_hiertree', serialize($hierTree));
   }
   else {
     $hier = $hierTree[$key];
@@ -258,16 +245,11 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
 function orgchart_get_hierarchy_base($root_employee_id) {
   static $fields;
   static $hierarchy;
-  // dpm('orgchart_get_hierarchy_base: root_employee_id='.$root_employee_id);
       
   if (!isset($hierarchy)) {
     $cache = cache_get('orgchart_hierarchy', 'cache');
     $hierarchy = !isset($cache->data) ? array() : $cache->data;
-    dpm('hierarchy cache');
-    dvm($hierarchy);
   }
-  
-  
   
   if (isset($hierarchy[$root_employee_id])) {
     return $hierarchy[$root_employee_id];
@@ -275,7 +257,6 @@ function orgchart_get_hierarchy_base($root_employee_id) {
   else { 
     // hierarchy was not found in cache. look it up
     $uid = orgchart_get_user_id ($root_employee_id);
-    // dpm('orgchart_get_hierarchy_base: uid='.$uid);
     
     if ($uid){
       if (!isset($fields)) {
@@ -310,10 +291,8 @@ function orgchart_get_hierarchy_base($root_employee_id) {
           $hierarchy[$root_employee_id]['profile_supervisor_id'] = $result->value;
         }
       }
-      dpm('orgchart_get_hierarchy_base: hierarchy=');
-      dvm($hierarchy[$root_employee_id]);
       // save to cache
-      cache_set('orgchart_hierarchy', serialize($hierarchy), 'cache');
+      cache_set('orgchart_hierarchy', serialize($hierarchy));
       return $hierarchy[$root_employee_id];
     }
   }
