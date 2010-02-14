@@ -18,6 +18,13 @@ function orgchart_help ($path, $arg) {
 }  // function orgchart_help
 
 /**
+ * Implementation of hook_init().
+ */
+function orgchart_init() {
+  drupal_add_css(drupal_get_path('module', 'orgchart') .'/orgchart.css');
+}
+
+/**
 * Valid permissions for this module
 * @return array An array of valid permissions for the orgchart module
 */
@@ -74,13 +81,16 @@ function orgchart_display_html($hier, $showBoss=true, $root=true) {
   $classMe = 'orgchart_me';
   
   $html = array();
+  
+  $isMe = $GLOBALS['user']->uid == $hier['uid'];
+  
   if ($root) $html[] = '<div class="orgchart"';
-  if ($showBoss) $html[] = '<ul><span class="orgchart_person '.$orgchart_supervisor.'">' . orgchart_user_link($hier['supervisor']) . '</span><li>';
-  $html[] = '<ul><span class="orgchart_person '.(
-    $GLOBALS['user']->uid == $hier['uid'] ? $classMe : $classSubordinate
-    ).'">' . orgchart_user_link($hier) . '</span>';
+  if ($showBoss) $html[] = '<ul class="orgchart"><span class="orgchart_person '.$classDirectSupervisor.'">' . orgchart_user_link($hier['supervisor']) . '</span><li class="orgchart">';
+  $html[] = '<ul class="orgchart"><span class="orgchart_person '.(
+    $isMe ? $classMe : $classSubordinate
+    ).'">' . orgchart_user_link($hier) . ($isMe ? ' (You)' : '') . '</span>';
   foreach ( $hier['subordinates'] as $sub ) {
-    $html[] = '<li>';
+    $html[] = '<li class="orgchart">';
     $html[] = orgchart_display_html($sub,false,false);
     $html[] = '</li>';
     
@@ -97,7 +107,7 @@ function orgchart_get_key_fields() {
   static $fields;
   if (!isset($fields)) {
     if ($cache = cache_get('orgchart_fields') && !empty($cache->data)) {
-      $fields = unserialize($cache->data);
+      $fields = $cache->data;
     }
     else {
       $fields = array();
@@ -107,7 +117,8 @@ function orgchart_get_key_fields() {
       while ($fields_info = db_fetch_object($query_result)) {
         $fields[$fields_info->name] = $fields_info->fid;
       }      
-      cache_set('orgchart_fields', serialize($fields));
+
+      $result = cache_set('orgchart_fields', $fields);
     }
   }
   return $fields;
@@ -144,7 +155,7 @@ function orgchart_get_user_id ($employee_id) {
       $id = $info->uid;
       $userids[$employee_id] = $id;
       // update the cache
-      cache_set('orgchart_userids', serialize($userids));
+      cache_set('orgchart_userids', $userids);
       
       return $id;
     }
@@ -184,7 +195,7 @@ function orgchart_get_employee_id ($uid) {
       $id = $info->value;
       $employeeIds[$uid] = $id;
       // update the cache
-      cache_set('orgchart_employeeids', serialize($employeeIds));
+      cache_set('orgchart_employeeids', $employeeIds);
       
       return $id;
     }
@@ -233,7 +244,7 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
       $hier['coworkers'] = $supervisorHierarchy['subordinates'];
     }
     $hierTree[$key] = &$hier;
-    cache_set('orgchart_hiertree', serialize($hierTree));
+    cache_set('orgchart_hiertree', $hierTree);
   }
   else {
     $hier = $hierTree[$key];
@@ -292,7 +303,7 @@ function orgchart_get_hierarchy_base($root_employee_id) {
         }
       }
       // save to cache
-      cache_set('orgchart_hierarchy', serialize($hierarchy));
+      cache_set('orgchart_hierarchy', $hierarchy);
       return $hierarchy[$root_employee_id];
     }
   }

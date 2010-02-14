@@ -1,0 +1,14 @@
+ul.orgchart, li.orgchart {
+  margin-left: 1px;
+}
+ul.orgchart {
+  margin: 0px;
+  padding: 0px;
+}
+div.orgchart .orgchart_me {
+  font-weight: bold;
+  border-bottom: 1px #000 dotted;
+}
+div.orgchart .orgchart_supervisor {
+  font-style: italic;
+}
