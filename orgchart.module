@@ -111,7 +111,7 @@ function orgchart_get_key_fields() {
     }
     else {
       $fields = array();
-      $query = "SELECT fid, name FROM {profile_fields} WHERE name in ('profile_employee_id', 'profile_supervisor_id', 'profile_subordinate_id')";
+      $query = "SELECT fid, name FROM {profile_fields} WHERE name in ('profile_employee_id', 'profile_supervisor_id')";
       $query_result = db_query($query);
       // retrieve fields. this should probably be cached.
       while ($fields_info = db_fetch_object($query_result)) {
@@ -219,6 +219,7 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
     }
   }
   
+  // key used for hashing
   $key = implode('-', func_get_args());
   if (!isset($hierTree[$key])) {
     $hier = orgchart_get_hierarchy_base($root_employee_id);
@@ -227,15 +228,13 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
       if ($direction<=0) {
         // go down in the hierarchy
         $hier['subordinates'] = array();
-        if (!empty($hier['profile_subordinate_id'])) {
-          foreach($hier['profile_subordinate_id'] as $sub) {
-            $hier['subordinates'][] = orgchart_get_hierarchy($sub, -1, $depth-1);
-          }
+        foreach($hier['profile_subordinate_id'] as $subid) {
+          $hier['subordinates'][] = orgchart_get_hierarchy($subid, -1, $depth - 1);
         }
       }
       if ($direction>=0 && !empty($hier['profile_supervisor_id'])) {
         // go up in the hierarchy
-        $hier['supervisor'] = orgchart_get_hierarchy($hier['profile_supervisor_id'], 1, $depth-1);
+        $hier['supervisor'] = orgchart_get_hierarchy($hier['profile_supervisor_id'], 1, $depth - 1);
       }
     }
     if ($get_coworkers && isset($hier['supervisor'])) {
@@ -251,6 +250,27 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
   }
   
   return $hier;
+}
+
+function orgchart_get_subordinates($empId) {
+  static $subordinates;
+  if (!isset($subordinates)) {
+    $cache = cache_get('orgchart_subordinates');
+    $subordinates = !isset($cache->data) ? array() : $cache->data;
+  }
+  
+  if (!isset($subordinates[$empId])) {
+    $subordinates[$empId] = array();
+    // gets all employee ids
+    $query = "SELECT sub.uid, sub.value as profile_employee_id FROM {profile_values} sup INNER JOIN {profile_values} sub ON sup.fid = %d and sup.value = %d and sub.uid = sup.uid and sub.fid = %d";
+    $result = db_query($query, $fields['profile_supervisor_id'], $empId, $fields['profile_employee_id']);
+    if ($info = db_fetch_array($result)) {
+      $subordinates[$empId][] = $info['profile_employee_id'];
+    }
+    // save cache
+    cache_save('orgchart_subordinates', $subordinates);
+  }
+  return $subordinates[$empId];  
 }
 
 function orgchart_get_hierarchy_base($root_employee_id) {
@@ -279,7 +299,6 @@ function orgchart_get_hierarchy_base($root_employee_id) {
         $uid, 
         $fields['profile_employee_id'], 
         $fields['profile_supervisor_id'], 
-        $fields['profile_subordinate_id']
         );
       // init hierarchy
       $user = &user_load($uid);
@@ -287,18 +306,11 @@ function orgchart_get_hierarchy_base($root_employee_id) {
         'profile_employee_id' => $root_employee_id,
         'uid' => $uid,
         'name' => $user->name,
-        'profile_supervisor_id' => null, // init to empty, will be set by array
-        'profile_subordinate_id' => null
+        'profile_subordinate_id' => orgchart_get_subordinates($uid),
+        'profile_supervisor_id' => null // init to empty, will be set by array
         );
       while ($result = db_fetch_object($query_info_result)) {
-        if ($result->fid == $fields['profile_subordinate_id']) {
-          // the subordinates are stored as a text list separated by either comma's or newlines
-          
-          $hierarchy[$root_employee_id]['profile_subordinate_id'] = 
-            trim($result->value) == '' ? array() : preg_split('/(\\r?\\n|,)/', $result->value);
-          
-        }
-        else if ($result->fid == $fields['profile_supervisor_id']) {
+        if ($result->fid == $fields['profile_supervisor_id']) {
           $hierarchy[$root_employee_id]['profile_supervisor_id'] = $result->value;
         }
       }
