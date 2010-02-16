@@ -111,7 +111,11 @@ function orgchart_get_key_fields() {
     }
     else {
       $fields = array();
-      $query = "SELECT fid, name FROM {profile_fields} WHERE name in ('profile_employee_id', 'profile_supervisor_id')";
+
+      $profileFieldEmployee = variable_get('orgchart_profile_field_employee_id', 'profile_employee_id');      
+      $profileFieldSupervisor = variable_get('orgchart_profile_field_supervisor_id', 'profile_supervisor_id');
+      
+      $query = "SELECT fid, name FROM {profile_fields} WHERE name in ('$profileFieldEmployee', '$profileFieldSupervisor')";
       $query_result = db_query($query);
       // retrieve fields. this should probably be cached.
       while ($fields_info = db_fetch_object($query_result)) {
@@ -268,7 +272,7 @@ function orgchart_get_subordinates($empId) {
       $subordinates[$empId][] = $info['profile_employee_id'];
     }
     // save cache
-    cache_save('orgchart_subordinates', $subordinates);
+    cache_set('orgchart_subordinates', $subordinates);
   }
   return $subordinates[$empId];  
 }
@@ -320,4 +324,48 @@ function orgchart_get_hierarchy_base($root_employee_id) {
     }
   }
   return null;
+}
+
+
+function orgchart_admin() {
+  $form = array();
+
+  $form['orgchart_profile_field_employee_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Employee ID'),
+    '#default_value' => variable_get('orgchart_profile_field_employee_id', 'profile_employee_id'),
+    '#size' => 50,
+    '#maxlength' => 50,
+    '#description' => t("The profile field which contains the unique ID."),
+    '#required' => TRUE,
+  );
+
+  $form['orgchart_profile_field_supervisor_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Supervisor ID'),
+    '#default_value' => variable_get('orgchart_profile_field_supervisor_id', 'profile_supervisor_id'),
+    '#size' => 50,
+    '#maxlength' => 50,
+    '#description' => t("The profile field which contains the supervisor's unique ID."),
+    '#required' => TRUE,
+  );
+
+  return system_settings_form($form);
+}
+
+
+function orgchart_menu() {
+
+  $items = array();
+
+  $items['admin/settings/orgchart'] = array(
+    'title' => 'Org Chart settings',
+    'description' => 'Org chart settings',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('orgchart_admin'),
+    'access arguments' => array('access administration pages'),
+    'type' => MENU_NORMAL_ITEM
+   );
+
+  return $items;
 }
