@@ -298,7 +298,7 @@ function orgchart_get_hierarchy_base($root_employee_id) {
         $query_info, 
         $uid, 
         $fields['profile_employee_id'], 
-        $fields['profile_supervisor_id'], 
+        $fields['profile_supervisor_id'] 
         );
       // init hierarchy
       $user = &user_load($uid);
