@@ -89,11 +89,14 @@ function orgchart_display_html($hier, $showBoss=true, $root=true) {
   $html[] = '<ul class="orgchart"><span class="orgchart_person '.(
     $isMe ? $classMe : $classSubordinate
     ).'">' . orgchart_user_link($hier) . ($isMe ? ' (You)' : '') . '</span>';
-  foreach ( $hier['subordinates'] as $sub ) {
-    $html[] = '<li class="orgchart">';
-    $html[] = orgchart_display_html($sub,false,false);
-    $html[] = '</li>';
+  
+  if (is_array($hier['subordinates'])) {
+    foreach ( $hier['subordinates'] as $sub ) {
+      $html[] = '<li class="orgchart">';
+      $html[] = orgchart_display_html($sub,false,false);
+      $html[] = '</li>';
     
+    }
   }
   $html[] = '</ul>';
   if ($showBoss) $html[] = '</li></ul>';
@@ -116,11 +119,17 @@ function orgchart_get_key_fields() {
       $profileFieldSupervisor = variable_get('orgchart_profile_field_supervisor_id', 'profile_supervisor_id');
       
       $query = "SELECT fid, name FROM {profile_fields} WHERE name in ('$profileFieldEmployee', '$profileFieldSupervisor')";
+
       $query_result = db_query($query);
       // retrieve fields. this should probably be cached.
       while ($fields_info = db_fetch_object($query_result)) {
-        $fields[$fields_info->name] = $fields_info->fid;
-      }      
+        if($fields_info->name == $profileFieldEmployee)
+          $fields['profile_employee_id'] = $fields_info->fid;
+        elseif($fields_info->name == $profileFieldSupervisor)
+          $fields['profile_supervisor_id'] = $fields_info->fid;
+      }
+      
+      
 
       $result = cache_set('orgchart_fields', $fields);
     }
@@ -258,17 +267,25 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
 
 function orgchart_get_subordinates($empId) {
   static $subordinates;
+  static $fields;
+  
   if (!isset($subordinates)) {
     $cache = cache_get('orgchart_subordinates');
     $subordinates = !isset($cache->data) ? array() : $cache->data;
   }
   
   if (!isset($subordinates[$empId])) {
+    $fields = orgchart_get_key_fields ();
+    
     $subordinates[$empId] = array();
-    // gets all employee ids
+    // retrieves employee ids of all subordinates
     $query = "SELECT sub.uid, sub.value as profile_employee_id FROM {profile_values} sup INNER JOIN {profile_values} sub ON sup.fid = %d and sup.value = %d and sub.uid = sup.uid and sub.fid = %d";
+    
+    // issue query
     $result = db_query($query, $fields['profile_supervisor_id'], $empId, $fields['profile_employee_id']);
-    if ($info = db_fetch_array($result)) {
+    
+    // fetch each result and load it into the return array
+    while ($info = db_fetch_array($result)) {
       $subordinates[$empId][] = $info['profile_employee_id'];
     }
     // save cache
@@ -310,7 +327,7 @@ function orgchart_get_hierarchy_base($root_employee_id) {
         'profile_employee_id' => $root_employee_id,
         'uid' => $uid,
         'name' => $user->name,
-        'profile_subordinate_id' => orgchart_get_subordinates($uid),
+        'profile_subordinate_id' => orgchart_get_subordinates($root_employee_id),
         'profile_supervisor_id' => null // init to empty, will be set by array
         );
       while ($result = db_fetch_object($query_info_result)) {
