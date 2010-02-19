@@ -51,7 +51,7 @@ function orgchart_block($op = 'list', $delta = 0, $edit = array()) {
     $block['subject'] = 'Org Chart';
     $hier = orgchart_get_hierarchy($eId);
     $block['content'] = $eId ? 
-      orgchart_display_html($hier) ://'<pre>' . print_r($hier, true) . '</pre>':
+      orgchart_display_graphviz($hier) :
       'No employee id specified.';
     
     
@@ -64,14 +64,26 @@ function orgchart_user_link ($uid, $linkText = '') {
   $u = $uid;
   if (is_object($uid)) {
     $u = $uid->uid;
-    if ( $linkText == '' ) $linkText = $uid->name;
   }
   else if (is_array($uid)) {
     $u = $uid['uid'];
-    if ( $linkText == '' ) $linkText = $uid['name'];
   }
   
+  if ($linkText == '') $linkText = orgchart_user_name($uid);
+  
   return l($linkText, '/user/'.$u);
+}
+
+function orgchart_user_name($uid) {
+  $linkText = false;
+  if (is_object($uid)) {
+    $linkText = $uid->name;
+  }
+  else if (is_array($uid)) {
+    $linkText = $uid['name'];
+  }
+  
+  return $linkText;
 }
 
 function orgchart_display_html($hier, $showBoss=true, $root=true) {
@@ -98,8 +110,63 @@ function orgchart_display_html($hier, $showBoss=true, $root=true) {
   $html[] = '</ul>';
   if ($showBoss) $html[] = '</li></ul>';
   if ($root) $html[] = '</div>';
-  return implode('',$html);
+  return implode('',$html); 
+}
+
+function orgchart_display_graphviz($hier, $showBoss=true, &$graph=null) {
+  $root = false;
+  if ( empty($graph) ) {
+    require_once 'Image/GraphViz.php'; // PEAR library
+    $graph = new Image_GraphViz();
+    $graph->binPath = '/opt/local/var/macports/software/graphviz/2.24.0_1+macosx/opt/local/bin/';
+    $root = true;
+  }
   
+  $html = array();
+   
+  $isMe = $GLOBALS['user']->uid == $hier['uid'];
+   
+   if ( $showBoss ) {
+     // creates the node
+     orgchart_display_graphviz($hier['supervisor'],false,&$graph);
+     // adds the edge
+     // add the edges
+     $graph->addEdge(
+       array($hier['supervisor']['uid']=>$hier['uid']), 
+       array(
+         'color'=>'red',
+         'label'=>'' // no label
+       ));
+   }
+   
+  // create a node that represents the current useer
+  $graph->addNode($hier['uid'], array(
+    'URL' => 'http://www.google.com',
+    'label' => orgchart_user_name($hier),
+    'shape' => $isMe ? 'circle' : 'box'
+    ));
+  
+  if (is_array($hier['subordinates'])) {
+    foreach ( $hier['subordinates'] as $sub ) {
+      // add the nodes
+      orgchart_display_graphviz($sub,false,&$graphViz);
+      // add the edges
+      $graph->addEdge(
+        array($hier['uid']=>$sub['uid']), array(
+        'color'=>'red',
+        'label'=>'' // no label
+        ));      
+    
+    }
+  }
+  
+  if ( $root ) {
+    $imageData = $graph->fetch('plain');
+    return $imageData;
+  } 
+  else {
+    return ''; // return nothing 
+  }
 }
 
 
