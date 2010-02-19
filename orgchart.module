@@ -51,7 +51,7 @@ function orgchart_block($op = 'list', $delta = 0, $edit = array()) {
     $block['subject'] = 'Org Chart';
     $hier = orgchart_get_hierarchy($eId);
     $block['content'] = $eId ? 
-      orgchart_display_html($hier) ://'<pre>' . print_r($hier, true) . '</pre>':
+      orgchart_display($hier) :
       'No employee id specified.';
     
     
@@ -60,18 +60,49 @@ function orgchart_block($op = 'list', $delta = 0, $edit = array()) {
   }
 } // function orgchart_block
 
+function orgchart_display($hier) {
+  static $type;
+  
+  $rtn = '';
+  if ( !isset($type) ) {
+    $type = variable_get('orgchart_display_type', 'html');
+  }
+  
+  switch($type) {
+    case 'graphviz':
+      $rtn = orgchart_display_graphviz($hier);
+      break;
+    default:
+      $rtn = orgchart_display_html($hier);
+  }
+  
+  return $rtn;
+}
+
 function orgchart_user_link ($uid, $linkText = '') {
   $u = $uid;
   if (is_object($uid)) {
     $u = $uid->uid;
-    if ( $linkText == '' ) $linkText = $uid->name;
   }
   else if (is_array($uid)) {
     $u = $uid['uid'];
-    if ( $linkText == '' ) $linkText = $uid['name'];
   }
   
+  if ($linkText == '') $linkText = orgchart_user_name($uid);
+  
   return l($linkText, '/user/'.$u);
+}
+
+function orgchart_user_name($uid) {
+  $linkText = 'No name';
+  if (is_object($uid)) {
+    $linkText = $uid->name;
+  }
+  else if (is_array($uid)) {
+    $linkText = $uid['name'];
+  }
+  
+  return $linkText;
 }
 
 function orgchart_display_html($hier, $showBoss=true, $root=true) {
@@ -89,17 +120,95 @@ function orgchart_display_html($hier, $showBoss=true, $root=true) {
   $html[] = '<ul class="orgchart"><span class="orgchart_person '.(
     $isMe ? $classMe : $classSubordinate
     ).'">' . orgchart_user_link($hier) . ($isMe ? ' (You)' : '') . '</span>';
-  foreach ( $hier['subordinates'] as $sub ) {
-    $html[] = '<li class="orgchart">';
-    $html[] = orgchart_display_html($sub,false,false);
-    $html[] = '</li>';
+  
+  if (is_array($hier['subordinates'])) {
+    foreach ( $hier['subordinates'] as $sub ) {
+      $html[] = '<li class="orgchart">';
+      $html[] = orgchart_display_html($sub,false,false);
+      $html[] = '</li>';
     
+    }
   }
   $html[] = '</ul>';
   if ($showBoss) $html[] = '</li></ul>';
   if ($root) $html[] = '</div>';
-  return implode('',$html);
+  return implode('',$html); 
+}
+
+function orgchart_display_graphviz($hier, $showBoss=true, &$graph=null) {
+  static $binPath;
+  if ( !isset($binPath) ) {
+    // no default is specificed, because the binary could be anywhere.
+    $binPath = variable_get('orgchart_graphviz_binpath', '');      
+  }
   
+  $root = false;
+  if ( empty($graph) ) {
+    require_once 'Image/GraphViz.php'; // PEAR library
+    $graph = new Image_GraphViz();
+    $graph->binPath = $binPath;
+    $root = true;
+  }
+  
+  $html = array();
+   
+  $isMe = $GLOBALS['user']->uid == $hier['uid'];
+   
+   if ( $showBoss ) {
+     // creates the node
+     orgchart_display_graphviz($hier['supervisor'],false,&$graph);
+     // adds the edge
+     // add the edges
+     $graph->addEdge(
+       array($hier['supervisor']['uid']=>$hier['uid']), 
+       array(
+         'color'=>'red',
+         'label'=>'' // no label
+       ));
+   }
+   
+  // create a node that represents the current useer
+  $graph->addNode($hier['uid'], array(
+    'URL' => 'http://www.google.com',
+    'label' => orgchart_user_name($hier),
+    'shape' => $isMe ? 'circle' : 'box'
+    ));
+
+  if (is_array($hier['subordinates'])) {
+    foreach ( $hier['subordinates'] as $sub ) {
+      // add the nodes
+      
+      orgchart_display_graphviz($sub,false,&$graph);
+      // add the edges
+      $graph->addEdge(
+        array($hier['uid']=>$sub['uid']), array(
+        'color'=>'red',
+        'label'=>'' // no label
+        ));      
+    
+    }
+  }
+  
+  if ( $root ) {
+    $imageData = $graph->fetch('png');
+    $path = tempnam(orgchart_get_cachedir(), 'graph').'.png';
+    $handle = fopen($path, 'w');
+    fputs($handle, $imageData);
+    fclose($handle);
+    
+    $url = drupal_get_path('module', 'orgchart').'/cache/'.basename($path);
+    global $base_url;
+    return "<img src=\"$url\" alt=\"org chart\" title=\"{$hier['name']}'s Organizational Hierarchy\" />";
+  } 
+  else {
+    return ''; // return nothing 
+  }
+}
+
+
+
+function orgchart_get_cachedir() {
+  return dirname(__FILE__).'/cache';
 }
 
 
@@ -111,12 +220,22 @@ function orgchart_get_key_fields() {
     }
     else {
       $fields = array();
-      $query = "SELECT fid, name FROM {profile_fields} WHERE name in ('profile_employee_id', 'profile_supervisor_id', 'profile_subordinate_id')";
+
+      $profileFieldEmployee = variable_get('orgchart_profile_field_employee_id', 'profile_employee_id');      
+      $profileFieldSupervisor = variable_get('orgchart_profile_field_supervisor_id', 'profile_supervisor_id');
+      
+      $query = "SELECT fid, name FROM {profile_fields} WHERE name in ('$profileFieldEmployee', '$profileFieldSupervisor')";
+
       $query_result = db_query($query);
       // retrieve fields. this should probably be cached.
       while ($fields_info = db_fetch_object($query_result)) {
-        $fields[$fields_info->name] = $fields_info->fid;
-      }      
+        if($fields_info->name == $profileFieldEmployee)
+          $fields['profile_employee_id'] = $fields_info->fid;
+        elseif($fields_info->name == $profileFieldSupervisor)
+          $fields['profile_supervisor_id'] = $fields_info->fid;
+      }
+      
+      
 
       $result = cache_set('orgchart_fields', $fields);
     }
@@ -219,6 +338,7 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
     }
   }
   
+  // key used for hashing
   $key = implode('-', func_get_args());
   if (!isset($hierTree[$key])) {
     $hier = orgchart_get_hierarchy_base($root_employee_id);
@@ -227,15 +347,13 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
       if ($direction<=0) {
         // go down in the hierarchy
         $hier['subordinates'] = array();
-        if (!empty($hier['profile_subordinate_id'])) {
-          foreach($hier['profile_subordinate_id'] as $sub) {
-            $hier['subordinates'][] = orgchart_get_hierarchy($sub, -1, $depth-1);
-          }
+        foreach($hier['profile_subordinate_id'] as $subid) {
+          $hier['subordinates'][] = orgchart_get_hierarchy($subid, -1, $depth - 1);
         }
       }
       if ($direction>=0 && !empty($hier['profile_supervisor_id'])) {
         // go up in the hierarchy
-        $hier['supervisor'] = orgchart_get_hierarchy($hier['profile_supervisor_id'], 1, $depth-1);
+        $hier['supervisor'] = orgchart_get_hierarchy($hier['profile_supervisor_id'], 1, $depth - 1);
       }
     }
     if ($get_coworkers && isset($hier['supervisor'])) {
@@ -251,6 +369,35 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
   }
   
   return $hier;
+}
+
+function orgchart_get_subordinates($empId) {
+  static $subordinates;
+  static $fields;
+  
+  if (!isset($subordinates)) {
+    $cache = cache_get('orgchart_subordinates');
+    $subordinates = !isset($cache->data) ? array() : $cache->data;
+  }
+  
+  if (!isset($subordinates[$empId])) {
+    $fields = orgchart_get_key_fields ();
+    
+    $subordinates[$empId] = array();
+    // retrieves employee ids of all subordinates
+    $query = "SELECT sub.uid, sub.value as profile_employee_id FROM {profile_values} sup INNER JOIN {profile_values} sub ON sup.fid = %d and sup.value = %d and sub.uid = sup.uid and sub.fid = %d";
+    
+    // issue query
+    $result = db_query($query, $fields['profile_supervisor_id'], $empId, $fields['profile_employee_id']);
+    
+    // fetch each result and load it into the return array
+    while ($info = db_fetch_array($result)) {
+      $subordinates[$empId][] = $info['profile_employee_id'];
+    }
+    // save cache
+    cache_set('orgchart_subordinates', $subordinates);
+  }
+  return $subordinates[$empId];  
 }
 
 function orgchart_get_hierarchy_base($root_employee_id) {
@@ -278,8 +425,7 @@ function orgchart_get_hierarchy_base($root_employee_id) {
         $query_info, 
         $uid, 
         $fields['profile_employee_id'], 
-        $fields['profile_supervisor_id'], 
-        $fields['profile_subordinate_id']
+        $fields['profile_supervisor_id'] 
         );
       // init hierarchy
       $user = &user_load($uid);
@@ -287,18 +433,11 @@ function orgchart_get_hierarchy_base($root_employee_id) {
         'profile_employee_id' => $root_employee_id,
         'uid' => $uid,
         'name' => $user->name,
-        'profile_supervisor_id' => null, // init to empty, will be set by array
-        'profile_subordinate_id' => null
+        'profile_subordinate_id' => orgchart_get_subordinates($root_employee_id),
+        'profile_supervisor_id' => null // init to empty, will be set by array
         );
       while ($result = db_fetch_object($query_info_result)) {
-        if ($result->fid == $fields['profile_subordinate_id']) {
-          // the subordinates are stored as a text list separated by either comma's or newlines
-          
-          $hierarchy[$root_employee_id]['profile_subordinate_id'] = 
-            trim($result->value) == '' ? array() : preg_split('/(\\r?\\n|,)/', $result->value);
-          
-        }
-        else if ($result->fid == $fields['profile_supervisor_id']) {
+        if ($result->fid == $fields['profile_supervisor_id']) {
           $hierarchy[$root_employee_id]['profile_supervisor_id'] = $result->value;
         }
       }
@@ -308,4 +447,73 @@ function orgchart_get_hierarchy_base($root_employee_id) {
     }
   }
   return null;
+}
+
+
+function orgchart_admin() {
+  $form = array();
+
+  $form['orgchart_profile_field_employee_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Employee ID'),
+    '#default_value' => variable_get('orgchart_profile_field_employee_id', 'profile_employee_id'),
+    '#size' => 50,
+    '#maxlength' => 50,
+    '#description' => t("The profile field which contains the unique ID."),
+    '#required' => TRUE,
+  );
+
+  $form['orgchart_profile_field_supervisor_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Supervisor ID'),
+    '#default_value' => variable_get('orgchart_profile_field_supervisor_id', 'profile_supervisor_id'),
+    '#size' => 50,
+    '#maxlength' => 50,
+    '#description' => t("The profile field which contains the supervisor's unique ID."),
+    '#required' => TRUE,
+  );
+
+
+  $form['orgchart_display_type'] = array(
+    '#type' => 'select',
+    '#title' => t('Display Type'),
+    '#default_value' => variable_get('orgchart_display_type', 'html'),
+    '#options' => array(
+      'html'=>t('HTML'),
+      'graphviz'=>t('GraphViz')
+      ),
+    '#description' => t("The full binary path to the GraphViz executables (such as dot)."),
+    '#required' => FALSE,
+  );
+
+  $form['orgchart_graphviz_binpath'] = array(
+    '#type' => 'textfield',
+    '#title' => t('GraphViz Binary Path'),
+    '#default_value' => variable_get('orgchart_graphviz_binpath', ''),
+    '#size' => 500,
+    '#maxlength' => 500,
+    '#description' => t("The full binary path to the GraphViz executables (such as dot)."),
+    '#required' => FALSE,
+  );  
+
+  
+
+  return system_settings_form($form);
+}
+
+
+function orgchart_menu() {
+
+  $items = array();
+
+  $items['admin/settings/orgchart'] = array(
+    'title' => 'Org Chart settings',
+    'description' => 'Org chart settings',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('orgchart_admin'),
+    'access arguments' => array('access administration pages'),
+    'type' => MENU_NORMAL_ITEM
+   );
+
+  return $items;
 }
