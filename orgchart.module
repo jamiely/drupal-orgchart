@@ -51,7 +51,7 @@ function orgchart_block($op = 'list', $delta = 0, $edit = array()) {
     $block['subject'] = 'Org Chart';
     $hier = orgchart_get_hierarchy($eId);
     $block['content'] = $eId ? 
-      orgchart_display_graphviz($hier) :
+      orgchart_display($hier) :
       'No employee id specified.';
     
     
@@ -59,6 +59,25 @@ function orgchart_block($op = 'list', $delta = 0, $edit = array()) {
     return $block;
   }
 } // function orgchart_block
+
+function orgchart_display($hier) {
+  static $type;
+  
+  $rtn = '';
+  if ( !isset($type) ) {
+    $type = variable_get('orgchart_display_type', 'html');
+  }
+  
+  switch($type) {
+    case 'graphviz':
+      $rtn = orgchart_display_graphviz($hier);
+      break;
+    default:
+      $rtn = orgchart_display_html($hier);
+  }
+  
+  return $rtn;
+}
 
 function orgchart_user_link ($uid, $linkText = '') {
   $u = $uid;
@@ -75,7 +94,7 @@ function orgchart_user_link ($uid, $linkText = '') {
 }
 
 function orgchart_user_name($uid) {
-  $linkText = false;
+  $linkText = 'No name';
   if (is_object($uid)) {
     $linkText = $uid->name;
   }
@@ -117,11 +136,17 @@ function orgchart_display_html($hier, $showBoss=true, $root=true) {
 }
 
 function orgchart_display_graphviz($hier, $showBoss=true, &$graph=null) {
+  static $binPath;
+  if ( !isset($binPath) ) {
+    // no default is specificed, because the binary could be anywhere.
+    $binPath = variable_get('orgchart_graphviz_binpath', '');      
+  }
+  
   $root = false;
   if ( empty($graph) ) {
     require_once 'Image/GraphViz.php'; // PEAR library
     $graph = new Image_GraphViz();
-    $graph->binPath = '/opt/local/var/macports/software/graphviz/2.24.0_1+macosx/opt/local/bin/';
+    $graph->binPath = $binPath;
     $root = true;
   }
   
@@ -148,11 +173,12 @@ function orgchart_display_graphviz($hier, $showBoss=true, &$graph=null) {
     'label' => orgchart_user_name($hier),
     'shape' => $isMe ? 'circle' : 'box'
     ));
-  
+
   if (is_array($hier['subordinates'])) {
     foreach ( $hier['subordinates'] as $sub ) {
       // add the nodes
-      orgchart_display_graphviz($sub,false,&$graphViz);
+      
+      orgchart_display_graphviz($sub,false,&$graph);
       // add the edges
       $graph->addEdge(
         array($hier['uid']=>$sub['uid']), array(
@@ -164,12 +190,25 @@ function orgchart_display_graphviz($hier, $showBoss=true, &$graph=null) {
   }
   
   if ( $root ) {
-    $imageData = $graph->fetch('plain');
-    return $imageData;
+    $imageData = $graph->fetch('png');
+    $path = tempnam(orgchart_get_cachedir(), 'graph').'.png';
+    $handle = fopen($path, 'w');
+    fputs($handle, $imageData);
+    fclose($handle);
+    
+    $url = drupal_get_path('module', 'orgchart').'/cache/'.basename($path);
+    global $base_url;
+    return "<img src=\"$url\" alt=\"org chart\" title=\"{$hier['name']}'s Organizational Hierarchy\" />";
   } 
   else {
     return ''; // return nothing 
   }
+}
+
+
+
+function orgchart_get_cachedir() {
+  return dirname(__FILE__).'/cache';
 }
 
 
@@ -433,6 +472,31 @@ function orgchart_admin() {
     '#description' => t("The profile field which contains the supervisor's unique ID."),
     '#required' => TRUE,
   );
+
+
+  $form['orgchart_display_type'] = array(
+    '#type' => 'select',
+    '#title' => t('Display Type'),
+    '#default_value' => variable_get('orgchart_display_type', 'html'),
+    '#options' => array(
+      'html'=>t('HTML'),
+      'graphviz'=>t('GraphViz')
+      ),
+    '#description' => t("The full binary path to the GraphViz executables (such as dot)."),
+    '#required' => FALSE,
+  );
+
+  $form['orgchart_graphviz_binpath'] = array(
+    '#type' => 'textfield',
+    '#title' => t('GraphViz Binary Path'),
+    '#default_value' => variable_get('orgchart_graphviz_binpath', ''),
+    '#size' => 500,
+    '#maxlength' => 500,
+    '#description' => t("The full binary path to the GraphViz executables (such as dot)."),
+    '#required' => FALSE,
+  );  
+
+  
 
   return system_settings_form($form);
 }
