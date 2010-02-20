@@ -135,74 +135,108 @@ function orgchart_display_html($hier, $showBoss=true, $root=true) {
   return implode('',$html); 
 }
 
-function orgchart_display_graphviz($hier, $showBoss=true, &$graph=null) {
-  static $binPath;
-  if ( !isset($binPath) ) {
-    // no default is specificed, because the binary could be anywhere.
-    $binPath = variable_get('orgchart_graphviz_binpath', '');      
-  }
-  
-  $root = false;
-  if ( empty($graph) ) {
+function orgchart_graphviz_loadclass (){
+  if(variable_get('orgchart_graphviz_usepear', true)) {
     require_once 'Image/GraphViz.php'; // PEAR library
-    $graph = new Image_GraphViz();
-    $graph->binPath = $binPath;
-    $root = true;
+  }
+  else {
+    require_once 'LocalGraphViz.php'; // local copy of PEAR library, changed.
   }
   
-  $html = array();
-   
-  $isMe = $GLOBALS['user']->uid == $hier['uid'];
-   
-   if ( $showBoss ) {
-     // creates the node
-     orgchart_display_graphviz($hier['supervisor'],false,&$graph);
-     // adds the edge
-     // add the edges
-     $graph->addEdge(
-       array($hier['supervisor']['uid']=>$hier['uid']), 
-       array(
-         'color'=>'red',
-         'label'=>'' // no label
-       ));
-   }
-   
-  // create a node that represents the current useer
-  $graph->addNode($hier['uid'], array(
-    'URL' => 'http://www.google.com',
-    'label' => orgchart_user_name($hier),
-    'shape' => $isMe ? 'circle' : 'box'
-    ));
+  
+}
 
-  if (is_array($hier['subordinates'])) {
-    foreach ( $hier['subordinates'] as $sub ) {
-      // add the nodes
-      
-      orgchart_display_graphviz($sub,false,&$graph);
-      // add the edges
-      $graph->addEdge(
-        array($hier['uid']=>$sub['uid']), array(
-        'color'=>'red',
-        'label'=>'' // no label
-        ));      
-    
+function orgchart_display_graphviz($hier, $showBoss=true, &$graph=null) {
+  static $images;
+  
+  $key = implode('-',array($hier['uid'],$showBoss));
+  if ( empty($images) ) {
+    if ( ($cache = cache_get ('orgchart_graphviz_images')) && !empty($cache->data)) {
+      $images = $cache->data;
+    }
+    else {
+      $images = array();
     }
   }
   
-  if ( $root ) {
-    $imageData = $graph->fetch('png');
-    $path = tempnam(orgchart_get_cachedir(), 'graph').'.png';
-    $handle = fopen($path, 'w');
-    fputs($handle, $imageData);
-    fclose($handle);
-    
-    $url = drupal_get_path('module', 'orgchart').'/cache/'.basename($path);
-    global $base_url;
-    return "<img src=\"$url\" alt=\"org chart\" title=\"{$hier['name']}'s Organizational Hierarchy\" />";
-  } 
-  else {
-    return ''; // return nothing 
+  $imageURL = '';
+  // must check not only that the cache data exists, but that the 
+  // image file itself exists. it may have been deleted by some
+  // external process
+  if ( $graph == null && isset($images[$key]) && file_exists($images[$key]) ) {
+    $imageURL = $images[$key];
   }
+  else {
+    static $binPath;
+    if ( !isset($binPath) ) {
+      // no default is specificed, because the binary could be anywhere.
+      $binPath = variable_get('orgchart_graphviz_binpath', '');      
+    }
+  
+    $root = false;
+    if ( empty($graph) ) {
+      // loads the Image_GraphViz class file
+      orgchart_graphviz_loadclass ();
+      
+      $graph = new Image_GraphViz();
+      $graph->binPath = $binPath;
+      $root = true;
+    }
+  
+    $html = array();
+   
+    $isMe = $GLOBALS['user']->uid == $hier['uid'];
+   
+     if ( $showBoss ) {
+       // creates the node
+       orgchart_display_graphviz($hier['supervisor'],false,&$graph);
+       // add the edges
+       $graph->addEdge(
+         array($hier['supervisor']['uid']=>$hier['uid']), 
+         array(
+           'color'=>'red',
+           'label'=>'' // no label
+         ));
+     }
+   
+    // create a node that represents the current useer
+    $graph->addNode($hier['uid'], array(
+      'URL' => 'http://www.google.com',
+      'label' => orgchart_user_name($hier),
+      'shape' => $isMe ? 'circle' : 'box'
+      ));
+
+    if (is_array($hier['subordinates'])) {
+      foreach ( $hier['subordinates'] as $sub ) {
+        // add the nodes
+      
+        orgchart_display_graphviz($sub,false,&$graph);
+        // add the edges
+        $graph->addEdge(
+          array($hier['uid']=>$sub['uid']), array(
+          'color'=>'red',
+          'label'=>'' // no label
+          ));      
+    
+      }
+    }
+  
+    if ( $root ) {
+      $ext = variable_get('orgchart_graphviz_output_format', 'png');
+      $imageData = $graph->fetch($ext);
+      $path = tempnam(orgchart_get_cachedir(), 'graph').'.'.$ext;
+      $handle = fopen($path, 'w');
+      fputs($handle, $imageData);
+      fclose($handle);
+      
+      $imageURL = drupal_get_path('module', 'orgchart').'/cache/'.basename($path);
+      $images[$key] = $imageURL;
+      cache_set('orgchart_graphviz_images', $images);
+    }
+  }
+  
+  return $imageURL == '' ? 'No image available' :
+    "<img src=\"$imageURL\" alt=\"org chart\" title=\"{$hier['name']}'s Organizational Hierarchy\" />";
 }
 
 
@@ -486,12 +520,36 @@ function orgchart_admin() {
     '#required' => FALSE,
   );
 
+  $form['orgchart_graphviz_output_format'] = array(
+    '#type' => 'select',
+    '#title' => t('Graphviz output format'),
+    '#default_value' => variable_get('orgchart_graphviz_output_format', 'png'),
+    '#options' => array(
+      'png'=>t('png'),
+      'gif'=>t('gif')
+      ),
+    '#description' => t("Graphviz output format (only required if display type is GraphViz)"),
+    '#required' => FALSE,
+  );
+  
+  
+  $form['orgchart_graphviz_usepear'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('GraphViz use PEAR library'),
+    '#default_value' => variable_get('orgchart_graphviz_usepear', true),
+    '#description' => t("GraphViz use PEAR library"),
+    '#required' => FALSE,
+  );
+
+  // orgchart_graphviz_usepear
+
+
   $form['orgchart_graphviz_binpath'] = array(
     '#type' => 'textfield',
     '#title' => t('GraphViz Binary Path'),
     '#default_value' => variable_get('orgchart_graphviz_binpath', ''),
-    '#size' => 500,
-    '#maxlength' => 500,
+    '#size' => 200,
+    '#maxlength' => 200,
     '#description' => t("The full binary path to the GraphViz executables (such as dot)."),
     '#required' => FALSE,
   );  
