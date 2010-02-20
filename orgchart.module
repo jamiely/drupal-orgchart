@@ -21,7 +21,10 @@ function orgchart_help ($path, $arg) {
  * Implementation of hook_init().
  */
 function orgchart_init() {
-  drupal_add_css(drupal_get_path('module', 'orgchart') .'/orgchart.css');
+  // only adds the css if org chart html display type is selected.
+  if ( variable_get('orgchart_display_type', 'html') == 'html' ) {
+    drupal_add_css(drupal_get_path('module', 'orgchart') .'/orgchart.css');
+  }
 }
 
 /**
@@ -39,28 +42,49 @@ function orgchart_perm() {
 * @param array $edit only for "save" operation
 **/
 function orgchart_block($op = 'list', $delta = 0, $edit = array()) { 
-  if ($op == "list") {
+  $block = array();
+
+  if ($_GET['q']=='orgchart') {
+    return array('subject'=>'', 'content'=>'');
+  }
+  else if ($op == "list") {
     // Generate listing of blocks from this module, for the admin/block page
-    $block = array();
+    
     $block[0]["info"] = t('Organizational Chart');
     return $block;
   }
   else if ($op == 'view') {
-    
-    $eId = orgchart_get_employee_id($GLOBALS['user']->uid);
-    $block['subject'] = 'Org Chart';
-    $hier = orgchart_get_hierarchy($eId);
-    $block['content'] = $eId ? 
-      orgchart_display($hier) :
-      'No employee id specified.';
-    
-    
+    $block = array (
+      'subject' => 'Org Chart',
+      'content' => orgchart_content($GLOBALS['user']->uid)
+      );
     
     return $block;
   }
 } // function orgchart_block
 
-function orgchart_display($hier) {
+function orgchart_content($uid = null) {
+  if (empty($uid)) {
+    // do not show boss when displaying from 
+    // root emploee
+    $root = variable_get('orgchart_root_employee', '1');
+    $hier = orgchart_get_hierarchy($root);
+    
+    return orgchart_display($hier,false);
+  }
+  else {
+    $eId = orgchart_get_employee_id($uid);
+    $hier = orgchart_get_hierarchy($eId);
+    
+    return orgchart_display($hier);
+  }
+}
+
+/**
+* Decides what display function should be used
+* based on the "orgchart_display_type" variable.
+**/
+function orgchart_display($hier,$showBoss=true) {
   static $type;
   
   $rtn = '';
@@ -70,10 +94,10 @@ function orgchart_display($hier) {
   
   switch($type) {
     case 'graphviz':
-      $rtn = orgchart_display_graphviz($hier);
+      $rtn = orgchart_display_graphviz($hier,$showBoss);
       break;
     default:
-      $rtn = orgchart_display_html($hier);
+      $rtn = orgchart_display_html($hier,$showBoss);
   }
   
   return $rtn;
@@ -198,12 +222,15 @@ function orgchart_display_graphviz($hier, $showBoss=true, &$graph=null) {
            'label'=>'' // no label
          ));
      }
+     
+
    
     // create a node that represents the current useer
     $graph->addNode($hier['uid'], array(
       'URL' => 'http://www.google.com',
       'label' => orgchart_user_name($hier),
-      'shape' => $isMe ? 'circle' : 'box'
+      'shape' => $isMe ? 'circle' : 'box',
+      'bgcolor'=>'transparent'
       ));
 
     if (is_array($hier['subordinates'])) {
@@ -372,6 +399,8 @@ function orgchart_get_hierarchy($root_employee_id, $direction = 0, $depth=3, $ge
     }
   }
   
+  
+  
   // key used for hashing
   $key = implode('-', func_get_args());
   if (!isset($hierTree[$key])) {
@@ -486,6 +515,18 @@ function orgchart_get_hierarchy_base($root_employee_id) {
 
 function orgchart_admin() {
   $form = array();
+  
+  $form['orgchart_root_employee'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Root Employee ID'),
+    '#default_value' => variable_get('orgchart_root_employee', '1'),
+    '#size' => 50,
+    '#maxlength' => 50,
+    '#description' => t("This is the employee who should appear at the root of the tree, typically the CEO."),
+    '#required' => TRUE,
+  );
+  
+  
 
   $form['orgchart_profile_field_employee_id'] = array(
     '#type' => 'textfield',
@@ -572,6 +613,26 @@ function orgchart_menu() {
     'access arguments' => array('access administration pages'),
     'type' => MENU_NORMAL_ITEM
    );
+   
+  $items['orgchart'] = array (
+    'title' => 'Organizational Chart',
+    'page callback' => 'orgchart_all',
+    'access arguments' => array('access orgchart content'),
+    'type' => MENU_CALLBACK
+    );
 
   return $items;
 }
+
+/**
+* Displays a whole page worth of content.
+* The entire organizational tree or some
+* selected subset of it.
+**/
+function orgchart_all() {
+  $content = orgchart_content ();
+  return $content;
+}
+
+
+
